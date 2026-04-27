@@ -24,7 +24,7 @@ export default function Login() {
       const res = await api.post('/admin/auth/login', { email, password });
       localStorage.setItem('adminToken', res.data.token);
       localStorage.setItem('adminUser', JSON.stringify(res.data.admin));
-      window.location.href = '/';
+      navigate('/');
     } catch {
       setError('Geçersiz e-posta veya şifre.');
     } finally {
