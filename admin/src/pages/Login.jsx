@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import axios from 'axios';
+import api from '../utils/api';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Leaf, ArrowRight, Zap } from 'lucide-react';
 import { t, inputBase, btnPrimary } from '../theme';
@@ -21,7 +21,7 @@ export default function Login() {
     if (!email || !password) { setError('E-posta ve şifre gerekli.'); return; }
     setLoading(true); setError('');
     try {
-      const res = await axios.post('/api/admin/auth/login', { email, password });
+      const res = await api.post('/admin/auth/login', { email, password });
       localStorage.setItem('adminToken', res.data.token);
       localStorage.setItem('adminUser', JSON.stringify(res.data.admin));
       window.location.href = '/';
