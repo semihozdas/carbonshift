@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "196318509835",
+    "project_id": "carbora-38961",
+    "storage_bucket": "carbora-38961.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:196318509835:android:736de59ba8479306f9400e",
+        "android_client_info": {
+          "package_name": "com.carbora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDyVboSebYIMnGgzZChF2XI14ociJ0Da1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:196318509835:android:81139eba95ced451f9400e",
+        "android_client_info": {
+          "package_name": "com.semihozdas.carbora"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDyVboSebYIMnGgzZChF2XI14ociJ0Da1k"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

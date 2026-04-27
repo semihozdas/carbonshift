@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:latest
+    container_name: carbonshift-postgres
+    environment:
+      POSTGRES_USER: carbonshift
+      POSTGRES_PASSWORD: carbonshift123
+      POSTGRES_DB: carbonshift
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carbonshift"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: carbonshift-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build: ./backend
+    container_name: carbonshift-backend
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://carbonshift:carbonshift123@postgres:5432/carbonshift
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: super-secret-change-in-production
+      PORT: 3001
+      NODE_ENV: production
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID}
+      FIREBASE_CLIENT_EMAIL: ${FIREBASE_CLIENT_EMAIL}
+      FIREBASE_PRIVATE_KEY: ${FIREBASE_PRIVATE_KEY}
+      ADMIN_SEED_EMAIL: admin@carbonshift.local
+      ADMIN_SEED_PASSWORD: admin123
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  admin:
+    build: ./admin
+    container_name: carbonshift-admin
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:

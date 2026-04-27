@@ -1,0 +1,59 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #060B14;
+  --primary: #00FF87;
+  --primary-glow: rgba(0,255,135,0.3);
+  --border: rgba(255,255,255,0.06);
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg);
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,255,135,0.25); }
+
+button { font-family: inherit; }
+input, textarea, select { font-family: inherit; }
+a { text-decoration: none; color: inherit; }
+
+/* Neon glow keyframe */
+@keyframes neonPulse {
+  0%, 100% { box-shadow: 0 0 8px rgba(0,255,135,0.3); }
+  50% { box-shadow: 0 0 20px rgba(0,255,135,0.6); }
+}
+
+@keyframes fadeSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.anim-fade-slide { animation: fadeSlideUp 0.4s ease both; }
+.anim-fade { animation: fadeIn 0.3s ease both; }
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Hover utilities */
+.hover-neon:hover {
+  border-color: rgba(0,255,135,0.4) !important;
+  transition: border-color 0.2s;
+}
