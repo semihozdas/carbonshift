@@ -4,7 +4,6 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "node backend/src/index.js",
-    "postinstall": "cd admin && npm install && npm run build",
     "expo-start": "npx expo start",
     "android": "npx expo start --android",
     "ios": "npx expo start --ios",
