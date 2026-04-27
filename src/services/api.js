@@ -12,7 +12,7 @@ function getBaseURL() {
       ? `http://${ANDROID_HOST}:3001`
       : 'http://localhost:3001';
   }
-  return `http://${ANDROID_HOST}:3001`;
+  return 'https://bisque-otter-122030.hostingersite.com';
 }
 
 export const TOKEN_KEY = 'cs_token';
