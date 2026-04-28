@@ -44,6 +44,9 @@ export default function MapScreen() {
     durationSec: 0, co2Saved: 0, ccEarned: 0,
     mode: 'stationary', dominantMode: 'walk', coords: [],
     stepCount: 0, busStopVisits: 0,
+    currentMode: 'walk', pendingMode: null,
+    distanceByMode: { walk: 0, bike: 0, bus: 0, car: 0 },
+    segments: [],
   });
   const [lastResult, setLastResult] = useState(null);
 
@@ -242,6 +245,55 @@ export default function MapScreen() {
         </View>
       )}
 
+      {/* Live mode breakdown (shown when >1 mode active) */}
+      {tracking && (() => {
+        const dbm = stats.distanceByMode || {};
+        const activeModes = ['walk', 'bike', 'bus', 'car'].filter(m => (dbm[m] || 0) > 0.01);
+        if (activeModes.length < 2) return null;
+        return (
+          <View style={[styles.breakdownPanel, { bottom: 296 + insets.bottom }]}>
+            <LinearGradient
+              colors={['rgba(6,11,20,0.95)', 'rgba(6,11,20,0.9)']}
+              style={StyleSheet.absoluteFill}
+            />
+            {activeModes.map((m, i) => {
+              const meta = MODE_META[m];
+              const isCurrent = stats.currentMode === m;
+              return (
+                <React.Fragment key={m}>
+                  {i > 0 && <View style={styles.breakdownDivider} />}
+                  <View style={styles.breakdownItem}>
+                    <Ionicons
+                      name={meta.icon}
+                      size={13}
+                      color={isCurrent ? meta.color : meta.color + 'AA'}
+                    />
+                    <Text style={[
+                      styles.breakdownVal,
+                      { color: isCurrent ? '#fff' : '#fff' + 'CC' },
+                    ]}>
+                      {dbm[m].toFixed(2)}
+                    </Text>
+                    <Text style={styles.breakdownLbl}>km</Text>
+                  </View>
+                </React.Fragment>
+              );
+            })}
+            {stats.pendingMode && stats.pendingMode !== stats.currentMode && (
+              <>
+                <View style={styles.breakdownDivider} />
+                <View style={styles.breakdownPending}>
+                  <Ionicons name="sync" size={11} color={colors.gold} />
+                  <Text style={styles.breakdownPendingText}>
+                    {MODE_META[stats.pendingMode]?.label}…
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
+        );
+      })()}
+
       {/* Live stats panel (slides up when tracking) */}
       <Animated.View
         style={[
@@ -326,6 +378,54 @@ export default function MapScreen() {
               </View>
             ))}
           </View>
+
+          {/* Trip composition — per-mode breakdown */}
+          {(() => {
+            const dbm = lastResult.distanceByMode || {};
+            const total = (dbm.walk || 0) + (dbm.bike || 0) + (dbm.bus || 0) + (dbm.car || 0);
+            const activeModes = ['walk', 'bike', 'bus', 'car']
+              .map(m => ({ mode: m, km: dbm[m] || 0 }))
+              .filter(x => x.km > 0.01);
+            if (activeModes.length < 2 || total <= 0) return null;
+            return (
+              <View style={styles.composition}>
+                <Text style={styles.compositionTitle}>YOLCULUK DETAYI</Text>
+                <View style={styles.compositionBar}>
+                  {activeModes.map((x, i) => (
+                    <View
+                      key={x.mode}
+                      style={{
+                        flex: x.km / total,
+                        height: '100%',
+                        backgroundColor: MODE_META[x.mode].color,
+                        borderTopLeftRadius: i === 0 ? 4 : 0,
+                        borderBottomLeftRadius: i === 0 ? 4 : 0,
+                        borderTopRightRadius: i === activeModes.length - 1 ? 4 : 0,
+                        borderBottomRightRadius: i === activeModes.length - 1 ? 4 : 0,
+                      }}
+                    />
+                  ))}
+                </View>
+                <View style={styles.compositionList}>
+                  {activeModes.map(x => {
+                    const meta = MODE_META[x.mode];
+                    const pct = Math.round((x.km / total) * 100);
+                    return (
+                      <View key={x.mode} style={styles.compositionRow}>
+                        <View style={styles.compositionRowLeft}>
+                          <Ionicons name={meta.icon} size={13} color={meta.color} />
+                          <Text style={styles.compositionLabel}>{meta.label}</Text>
+                        </View>
+                        <Text style={styles.compositionKm}>
+                          {x.km.toFixed(2)} km · {pct}%
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            );
+          })()}
           {lastResult.tooShort ? (
             <Text style={styles.tooShortText}>
               Mesafe çok kısa (min. 50m). Puan kazanılmadı.
@@ -496,6 +596,48 @@ const styles = StyleSheet.create({
   statLbl: { fontSize: 10, color: colors.textMuted, fontWeight: '600' },
   statDivider: { width: 1, backgroundColor: colors.border, marginVertical: 6 },
 
+
+  // Live mode breakdown (above stats panel when >1 mode used)
+  breakdownPanel: {
+    position: 'absolute', left: 12, right: 12,
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: radius.xl, paddingVertical: 10, paddingHorizontal: 4,
+    borderWidth: 1, borderColor: colors.gold + '40', overflow: 'hidden',
+    zIndex: 8,
+  },
+  breakdownItem: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 4,
+  },
+  breakdownVal: { fontSize: 13, fontWeight: '800' },
+  breakdownLbl: { fontSize: 10, color: colors.textMuted, fontWeight: '600' },
+  breakdownDivider: { width: 1, height: 18, backgroundColor: colors.border },
+  breakdownPending: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 8,
+  },
+  breakdownPendingText: {
+    fontSize: 11, fontWeight: '700', color: colors.gold,
+  },
+
+  // Trip composition (in result card)
+  composition: { marginTop: 14 },
+  compositionTitle: {
+    fontSize: 10, fontWeight: '800', color: colors.textMuted,
+    letterSpacing: 1.2, marginBottom: 8,
+  },
+  compositionBar: {
+    flexDirection: 'row', height: 8, borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.06)', overflow: 'hidden',
+    marginBottom: 10,
+  },
+  compositionList: { gap: 6 },
+  compositionRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+  },
+  compositionRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  compositionLabel: { fontSize: 12, color: '#fff', fontWeight: '600' },
+  compositionKm: { fontSize: 12, color: colors.textMuted, fontWeight: '600' },
 
   // Result card
   resultCard: {
