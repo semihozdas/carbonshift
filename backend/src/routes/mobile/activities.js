@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import pool from '../../db/pool.js';
-import { calculateCarbonAndCC } from '../../services/locationService.js';
+import { calculateCarbonAndCC, calculateCarbonAndCCFromBreakdown } from '../../services/locationService.js';
 import { detectAnomaly } from '../../services/anomalyService.js';
 import {
   updateStreak,
@@ -94,9 +94,35 @@ router.post('/', async (req, res) => {
     start_lng,
     end_lat,
     end_lng,
+    walk_km,
+    bus_km,
+    bike_km,
+    car_km,
+    segments,
   } = req.body || {};
 
-  if (!['walk', 'bus', 'car', 'bike'].includes(mode)) {
+  // Detect mixed-mode payload (any per-mode km > 0 means client sent breakdown).
+  const breakdown = {
+    walk_km: Number(walk_km) || 0,
+    bus_km: Number(bus_km) || 0,
+    bike_km: Number(bike_km) || 0,
+    car_km: Number(car_km) || 0,
+  };
+  const hasMixedBreakdown = Object.values(breakdown).some((v) => v > 0);
+
+  // Dominant mode = mode with most km (used for transport_mode, tasks, badges).
+  let dominantMode = mode;
+  if (hasMixedBreakdown) {
+    const modeKm = {
+      walk: breakdown.walk_km,
+      bus: breakdown.bus_km,
+      bike: breakdown.bike_km,
+      car: breakdown.car_km,
+    };
+    dominantMode = Object.entries(modeKm).sort(([, a], [, b]) => b - a)[0][0];
+  }
+
+  if (!['walk', 'bus', 'car', 'bike'].includes(dominantMode)) {
     return res.status(400).json({ error: 'Geçersiz ulaşım modu.' });
   }
   if (!distance_km || Number(distance_km) <= 0) {
@@ -114,20 +140,36 @@ router.post('/', async (req, res) => {
     );
     const multiplier = Number(camp[0].mult) || 1.0;
 
-    const { co2Saved, ccEarned, xp } = await calculateCarbonAndCC(mode, distance_km, multiplier);
-    const anomaly = await detectAnomaly({ mode, distance_km, duration_minutes, avg_speed_kmh });
+    const { co2Saved, ccEarned, xp } = hasMixedBreakdown
+      ? await calculateCarbonAndCCFromBreakdown(breakdown, multiplier)
+      : await calculateCarbonAndCC(dominantMode, distance_km, multiplier);
+
+    const anomaly = await detectAnomaly({
+      mode: dominantMode,
+      distance_km,
+      duration_minutes,
+      avg_speed_kmh,
+      segments: Array.isArray(segments) ? segments : null,
+      distanceBreakdown: hasMixedBreakdown ? breakdown : null,
+    });
 
     const insert = await client.query(
       `INSERT INTO activities
         (user_id, transport_mode, distance_km, co2_saved, cc_earned, duration_minutes,
          avg_speed_kmh, step_count, start_lat, start_lng, end_lat, end_lng,
-         is_anomaly, anomaly_reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         is_anomaly, anomaly_reason,
+         walk_km, bike_km, bus_km, car_km, segments)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING *`,
       [
-        userId, mode, distance_km, co2Saved, ccEarned, duration_minutes,
+        userId, dominantMode, distance_km, co2Saved, ccEarned, duration_minutes,
         avg_speed_kmh, step_count, start_lat, start_lng, end_lat, end_lng,
         anomaly.is_anomaly, anomaly.anomaly_reason,
+        hasMixedBreakdown ? breakdown.walk_km : 0,
+        hasMixedBreakdown ? breakdown.bike_km : 0,
+        hasMixedBreakdown ? breakdown.bus_km : 0,
+        hasMixedBreakdown ? breakdown.car_km : 0,
+        Array.isArray(segments) ? JSON.stringify(segments) : null,
       ]
     );
     const activity = insert.rows[0];
@@ -148,14 +190,14 @@ router.post('/', async (req, res) => {
         await client.query(
           `INSERT INTO cc_transactions (user_id, amount, type, description)
            VALUES ($1, $2, 'activity', $3)`,
-          [userId, ccEarned, `${mode} • ${Number(distance_km).toFixed(2)} km`]
+          [userId, ccEarned, `${dominantMode} • ${Number(distance_km).toFixed(2)} km`]
         );
       }
     } else {
       await client.query(
         `INSERT INTO security_logs (user_id, event_type, description, severity, metadata)
          VALUES ($1, 'activity_anomaly', $2, 'warning', $3)`,
-        [userId, anomaly.anomaly_reason, JSON.stringify({ mode, distance_km, duration_minutes })]
+        [userId, anomaly.anomaly_reason, JSON.stringify({ mode: dominantMode, distance_km, duration_minutes, breakdown: hasMixedBreakdown ? breakdown : null })]
       );
     }
 

@@ -130,6 +130,11 @@ CREATE TABLE IF NOT EXISTS activities (
     end_lng DECIMAL(11, 8),
     is_anomaly BOOLEAN DEFAULT FALSE,
     anomaly_reason TEXT,
+    walk_km DECIMAL(8, 3) DEFAULT 0,
+    bike_km DECIMAL(8, 3) DEFAULT 0,
+    bus_km  DECIMAL(8, 3) DEFAULT 0,
+    car_km  DECIMAL(8, 3) DEFAULT 0,
+    segments JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -59,6 +59,43 @@ export const calculateCarbonAndCC = async (mode, distanceKm, multiplier = 1) => 
   };
 };
 
+export const calculateCarbonAndCCFromBreakdown = async (
+  { walk_km = 0, bus_km = 0, bike_km = 0, car_km = 0 },
+  multiplier = 1,
+) => {
+  const s = await getSettings();
+  let co2Saved = 0;
+  let ccEarned = 0;
+  let xp = 0;
+
+  const w = Math.max(0, Number(walk_km) || 0);
+  co2Saved += (s.walk_co2_saved_per_km ?? 0.192) * w;
+  ccEarned += (s.walk_cc_per_km ?? 10) * w;
+  xp += (s.xp_per_km_walk ?? 15) * w;
+
+  const bu = Math.max(0, Number(bus_km) || 0);
+  co2Saved += (s.bus_co2_saved_per_km ?? 0.103) * bu;
+  ccEarned += (s.bus_cc_per_km ?? 5) * bu;
+  xp += (s.xp_per_km_bus ?? 5) * bu;
+
+  const bi = Math.max(0, Number(bike_km) || 0);
+  co2Saved += (s.bike_co2_saved_per_km ?? 0.192) * bi;
+  ccEarned += (s.bike_cc_per_km ?? 8) * bi;
+  xp += (s.xp_per_km_bike ?? 12) * bi;
+
+  const c = Math.max(0, Number(car_km) || 0);
+  co2Saved -= (s.car_co2_emitted_per_km ?? 0.192) * c;
+  ccEarned += (s.car_cc_penalty_per_km ?? -2) * c;
+
+  ccEarned *= multiplier;
+
+  return {
+    co2Saved: Math.round(co2Saved * 1000) / 1000,
+    ccEarned: Math.round(ccEarned * 100) / 100,
+    xp: Math.round(xp),
+  };
+};
+
 export const detectTransportMode = (speedKmh, isNearBusStop) => {
   if (speedKmh < 0.5) return 'stationary';
   if (speedKmh < 7) return 'walk';

@@ -96,6 +96,38 @@ export const classifyTripMode = ({
   return stepsPerKm > 400 ? 'walk' : 'bike';
 };
 
+// ─── Segment buffer ───────────────────────────────────────────────────────────
+// A candidate mode must hold for this long before it becomes a committed segment.
+export const SEGMENT_BUFFER_MS = 35_000;
+
+// Compute per-mode km totals from a finished segments array.
+export const calcDistanceByMode = (segments) => {
+  const result = { walk: 0, bike: 0, bus: 0, car: 0 };
+  for (const seg of segments) {
+    if (result[seg.mode] !== undefined) {
+      result[seg.mode] = Number((result[seg.mode] + seg.distanceKm).toFixed(3));
+    }
+  }
+  return result;
+};
+
+// CO2 and CC from a distanceByMode map (local estimates, backend is authoritative).
+export const calcMixedCO2 = (distanceByMode) => {
+  let total = 0;
+  for (const [mode, km] of Object.entries(distanceByMode)) {
+    total += (CO2_SAVED_G_PER_KM[mode] ?? 0) * (km || 0);
+  }
+  return Number(total.toFixed(1));
+};
+
+export const calcMixedCC = (distanceByMode) => {
+  let total = 0;
+  for (const [mode, km] of Object.entries(distanceByMode)) {
+    total += (CC_PER_KM[mode] ?? 0) * (km || 0);
+  }
+  return Number(total.toFixed(1));
+};
+
 // ─── CO2 & CC (local estimates, backend is authoritative) ─────────────────────
 export const CO2_SAVED_G_PER_KM = {
   walk: 120,

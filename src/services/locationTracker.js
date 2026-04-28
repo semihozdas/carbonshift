@@ -4,11 +4,11 @@ import {
   haversineMeters,
   detectMode,
   checkBusStopVisit,
-  classifyTripMode,
-  calcCO2Saved,
-  calcCC,
+  calcMixedCO2,
+  calcMixedCC,
   SPEED,
   BUS_STOP_VISIT_RADIUS_M,
+  SEGMENT_BUFFER_MS,
 } from '../utils/geo';
 import { getBusStops } from './busStops';
 import api from './api';
@@ -29,34 +29,42 @@ export const startTracking = async ({ onUpdate } = {}) => {
     accuracy: Location.Accuracy.BestForNavigation,
   });
 
+  const now = Date.now();
+
   state = {
-    startedAt: Date.now(),
+    startedAt: now,
     coords: [{
       latitude: initial.coords.latitude,
       longitude: initial.coords.longitude,
-      ts: Date.now(),
+      ts: now,
     }],
     distanceKm: 0,
     maxSpeedKmh: 0,
     speedSamples: [],
-    modeCounts: { walk: 0, bike: 0, bus: 0, car: 0 },
-    dominantMode: 'walk',
     lastSignificant: {
       latitude: initial.coords.latitude,
       longitude: initial.coords.longitude,
     },
     prevSpeedKmh: 0,
-    prevSpeedTs: Date.now(),
+    prevSpeedTs: now,
     // Bus detection
-    visitedStops: new Map(),   // stopId → lastVisitTimestamp
-    busStopVisits: 0,          // distinct stops visited while slow
-    slowdownNearStop: 0,       // times decelerated from vehicle speed to slow near a stop
-    wasAtVehicleSpeed: false,  // flag: was going fast recently
+    visitedStops: new Map(),
+    busStopVisits: 0,
+    slowdownNearStop: 0,
+    wasAtVehicleSpeed: false,
     // Steps
     stepCount: 0,
+    // ── Segment state machine ──────────────────────────────────────────────
+    // currentSeg: the open (uncommitted) segment being accumulated right now
+    currentSeg: { mode: 'walk', startTs: now, distanceKm: 0 },
+    // pendingMode: a candidate mode change that hasn't yet passed SEGMENT_BUFFER_MS
+    pendingMode: null,   // { mode: string, since: timestamp }
+    // segments: committed (finalised) segments
+    segments: [],        // [{ mode, distanceKm, durationSec }]
+    // per-mode cumulative km for the whole trip
+    distanceByMode: { walk: 0, bike: 0, bus: 0, car: 0 },
   };
 
-  // Start pedometer (graceful fallback if unavailable)
   try {
     const pedometerPerm = await Pedometer.requestPermissionsAsync();
     if (pedometerPerm.status === 'granted') {
@@ -79,7 +87,6 @@ export const startTracking = async ({ onUpdate } = {}) => {
       if (!state) return;
       const { latitude, longitude, speed, accuracy } = loc.coords;
 
-      // Filter poor GPS fixes
       if (accuracy != null && accuracy > MIN_ACCURACY_M) return;
 
       const movedMeters = haversineMeters(
@@ -90,33 +97,29 @@ export const startTracking = async ({ onUpdate } = {}) => {
       );
       if (movedMeters < MIN_MOVE_METERS) return;
 
-      state.distanceKm += movedMeters / 1000;
+      const movedKm = movedMeters / 1000;
+      state.distanceKm += movedKm;
       state.lastSignificant = { latitude, longitude };
 
-      const coord = { latitude, longitude, ts: Date.now() };
+      const ts = Date.now();
+      const coord = { latitude, longitude, ts };
       state.coords.push(coord);
 
-      const rawSpeedKmh = Math.max(0, (speed ?? 0) * 3.6);
-      const speedKmh = rawSpeedKmh;
+      const speedKmh = Math.max(0, (speed ?? 0) * 3.6);
 
-      // Rolling speed window
-      state.speedSamples.push({ speedKmh, ts: coord.ts });
+      state.speedSamples.push({ speedKmh, ts });
       state.speedSamples = state.speedSamples.filter(
-        (s) => coord.ts - s.ts <= MODE_WINDOW_MS
+        (s) => ts - s.ts <= MODE_WINDOW_MS
       );
       state.maxSpeedKmh = Math.max(state.maxSpeedKmh, speedKmh);
 
       const busStops = getBusStops();
 
-      // ── Bus stop visit detection ──────────────────────────────────────────
-      // A visit = user is slow (< BUS_STOP_SLOW) AND within radius of a stop
+      // Bus stop visit detection
       const visitedStopId = checkBusStopVisit(speedKmh, coord, busStops, state.visitedStops);
-      if (visitedStopId !== null) {
-        state.busStopVisits += 1;
-      }
+      if (visitedStopId !== null) state.busStopVisits += 1;
 
-      // ── Slowdown-near-stop detection ──────────────────────────────────────
-      // Counts transitions from vehicle speed → slow while near a stop
+      // Slowdown-near-stop detection
       if (state.wasAtVehicleSpeed && speedKmh < SPEED.BUS_STOP_SLOW) {
         const nearAnyStop = busStops.some(
           (s) => haversineMeters(latitude, longitude, s.latitude, s.longitude) < BUS_STOP_VISIT_RADIUS_M * 2
@@ -125,33 +128,72 @@ export const startTracking = async ({ onUpdate } = {}) => {
       }
       state.wasAtVehicleSpeed = speedKmh >= SPEED.VEHICLE_MIN;
 
-      // ── Live mode display (speed + instant proximity) ──────────────────────
+      // ── Segment state machine ──────────────────────────────────────────────
       const liveMode = detectMode(speedKmh, coord, busStops);
-      if (liveMode !== 'stationary') {
-        state.modeCounts[liveMode] = (state.modeCounts[liveMode] || 0) + 1;
-        const best = Object.entries(state.modeCounts).sort((a, b) => b[1] - a[1])[0];
-        if (best) state.dominantMode = best[0];
+
+      if (liveMode === 'stationary') {
+        // Brief stop — keep current segment, don't disturb pending timer.
+        state.currentSeg.distanceKm += movedKm;
+        state.distanceByMode[state.currentSeg.mode] =
+          (state.distanceByMode[state.currentSeg.mode] || 0) + movedKm;
+      } else if (liveMode === state.currentSeg.mode) {
+        // Same mode continuing — accumulate and cancel any pending switch.
+        state.currentSeg.distanceKm += movedKm;
+        state.distanceByMode[liveMode] =
+          (state.distanceByMode[liveMode] || 0) + movedKm;
+        state.pendingMode = null;
+      } else {
+        // Different mode detected — start or continue buffering.
+        if (state.pendingMode?.mode !== liveMode) {
+          // New candidate: reset buffer timer.
+          state.pendingMode = { mode: liveMode, since: ts };
+        } else if (ts - state.pendingMode.since >= SEGMENT_BUFFER_MS) {
+          // Candidate has been stable long enough → commit current segment.
+          state.segments.push({
+            mode: state.currentSeg.mode,
+            distanceKm: Number(state.currentSeg.distanceKm.toFixed(3)),
+            durationSec: Math.floor((ts - state.currentSeg.startTs) / 1000),
+          });
+          state.currentSeg = { mode: liveMode, startTs: ts, distanceKm: 0 };
+          state.pendingMode = null;
+        }
+        // While buffering, distance is charged to the current (confirmed) segment.
+        state.currentSeg.distanceKm += movedKm;
+        state.distanceByMode[state.currentSeg.mode] =
+          (state.distanceByMode[state.currentSeg.mode] || 0) + movedKm;
       }
+      // ── End segment state machine ──────────────────────────────────────────
 
       state.prevSpeedKmh = speedKmh;
-      state.prevSpeedTs = coord.ts;
+      state.prevSpeedTs = ts;
 
-      const durationSec = Math.floor((coord.ts - state.startedAt) / 1000);
+      const durationSec = Math.floor((ts - state.startedAt) / 1000);
       const avgSpeedKmh = _avg(state.speedSamples);
+
+      // Live view: committed segments + open segment snapshot
+      const openSeg = {
+        mode: state.currentSeg.mode,
+        distanceKm: Number(state.currentSeg.distanceKm.toFixed(3)),
+        durationSec: Math.floor((ts - state.currentSeg.startTs) / 1000),
+      };
 
       onUpdate?.({
         distanceKm: state.distanceKm,
         coords: state.coords,
         speedKmh,
         avgSpeedKmh,
-        mode: liveMode,
-        dominantMode: state.dominantMode,
+        currentMode: state.currentSeg.mode,
+        pendingMode: state.pendingMode?.mode ?? null,
+        segments: [...state.segments, openSeg],
+        distanceByMode: { ...state.distanceByMode },
         durationSec,
-        co2Saved: calcCO2Saved(state.distanceKm, state.dominantMode),
-        ccEarned: calcCC(state.distanceKm, state.dominantMode),
-        modeCounts: { ...state.modeCounts },
+        co2Saved: calcMixedCO2(state.distanceByMode),
+        ccEarned: calcMixedCC(state.distanceByMode),
         busStopVisits: state.busStopVisits,
         stepCount: state.stepCount,
+        // Legacy compat fields (some UI components may read these)
+        mode: state.currentSeg.mode,
+        dominantMode: _dominantMode(state.distanceByMode),
       });
     }
   );
@@ -164,7 +206,8 @@ export const stopTracking = async () => {
   subscription = null;
   pedometerSub = null;
 
-  const durationSec = Math.floor((Date.now() - state.startedAt) / 1000);
+  const now = Date.now();
+  const durationSec = Math.floor((now - state.startedAt) / 1000);
   const distKm = Number(state.distanceKm.toFixed(3));
   const avgSpeedKmh = Number(_avg(state.speedSamples).toFixed(2));
   const maxSpeedKmh = Number(state.maxSpeedKmh.toFixed(2));
@@ -172,32 +215,39 @@ export const stopTracking = async () => {
   const startCoord = coords[0];
   const endCoord = coords[coords.length - 1];
 
-  // ── Final mode classification ──────────────────────────────────────────────
-  const finalMode = classifyTripMode({
-    avgSpeedKmh,
-    maxSpeedKmh,
-    busStopVisits: state.busStopVisits,
-    slowdownNearStop: state.slowdownNearStop,
-    steps: state.stepCount,
-    distanceKm: distKm,
-  });
+  // Finalise the open segment (if it has meaningful distance).
+  if (state.currentSeg.distanceKm > 0.01) {
+    state.segments.push({
+      mode: state.currentSeg.mode,
+      distanceKm: Number(state.currentSeg.distanceKm.toFixed(3)),
+      durationSec: Math.floor((now - state.currentSeg.startTs) / 1000),
+    });
+  }
 
+  const segments = state.segments;
+  const distanceByMode = state.distanceByMode;
   const stepCount = state.stepCount;
   const busStopVisits = state.busStopVisits;
+  const dominantMode = _dominantMode(distanceByMode);
+
   state = null;
 
+  const co2Saved = calcMixedCO2(distanceByMode);
+  const ccEarned = calcMixedCC(distanceByMode);
   const tooShort = distKm <= 0.05;
 
   const result = {
-    mode: finalMode,
+    mode: dominantMode,
     distance_km: distKm,
     duration_sec: durationSec,
     avg_speed_kmh: avgSpeedKmh,
     max_speed_kmh: maxSpeedKmh,
     step_count: stepCount,
     bus_stop_visits: busStopVisits,
-    co2_saved_g: calcCO2Saved(distKm, finalMode),
-    cc_earned: calcCC(distKm, finalMode),
+    segments,
+    distanceByMode,
+    co2_saved_g: co2Saved,
+    cc_earned: ccEarned,
     coords,
     tooShort,
     submitted: false,
@@ -206,7 +256,7 @@ export const stopTracking = async () => {
   if (!tooShort) {
     try {
       const { data } = await api.post('/activities', {
-        mode: finalMode,
+        mode: dominantMode,
         distance_km: distKm,
         duration_minutes: durationSec / 60,
         avg_speed_kmh: avgSpeedKmh,
@@ -215,6 +265,12 @@ export const stopTracking = async () => {
         start_lng: startCoord?.longitude,
         end_lat: endCoord?.latitude,
         end_lng: endCoord?.longitude,
+        // Mixed-mode breakdown
+        walk_km: Number((distanceByMode.walk || 0).toFixed(3)),
+        bike_km: Number((distanceByMode.bike || 0).toFixed(3)),
+        bus_km: Number((distanceByMode.bus || 0).toFixed(3)),
+        car_km: Number((distanceByMode.car || 0).toFixed(3)),
+        segments,
       });
       result.cc_earned = Number(data.activity.cc_earned);
       result.co2_saved_g = Math.round(Number(data.activity.co2_saved) * 1000); // kg → g
@@ -237,4 +293,10 @@ export const isTracking = () => subscription !== null;
 const _avg = (samples) => {
   if (!samples?.length) return 0;
   return samples.reduce((a, s) => a + s.speedKmh, 0) / samples.length;
+};
+
+const _dominantMode = (distanceByMode) => {
+  const entries = Object.entries(distanceByMode).filter(([, km]) => km > 0);
+  if (!entries.length) return 'walk';
+  return entries.sort(([, a], [, b]) => b - a)[0][0];
 };
